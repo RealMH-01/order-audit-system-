@@ -159,6 +159,23 @@ def run_full_audit(
     # 步骤 1.2：扫描件PDF自动OCR
     # ==========================================================
 
+
+        # DeepSeek 不支持图片识别，检测到扫描件时提前终止并提示
+    has_scanned_pdf = (
+        (po_data.get("is_scanned_pdf") and po_data.get("pdf_page_images"))
+        or any(t.get("is_scanned_pdf") and t.get("pdf_page_images") for t in target_files_data)
+    )
+    if has_scanned_pdf and provider.lower().strip() in ("deepseek",):
+        error_msg = (
+            "检测到上传的PDF为扫描件（图片型PDF），需要使用AI图片识别（OCR）来提取文字。"
+            "但 DeepSeek API 目前不支持图片识别功能。"
+            "请前往左侧边栏将大模型切换为「智谱GLM」，然后重新开始审核。"
+        )
+        _progress("❌ " + error_msg)
+        result["errors"].append(error_msg)
+        return result
+
+    
     # --- 处理 PO 扫描件 ---
     if po_data.get("is_scanned_pdf") and po_data.get("pdf_page_images"):
         page_images = po_data["pdf_page_images"]
