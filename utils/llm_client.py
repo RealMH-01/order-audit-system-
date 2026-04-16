@@ -208,7 +208,8 @@ def _call_deepseek_vision(
 # 智谱 GLM（zhipuai SDK）
 # ============================================================
 _ZHIPU_TEXT_MODEL = "glm-4-flash"
-_ZHIPU_VISION_MODEL = "glm-4v-flash"
+__ZHIPU_VISION_MODEL = "glm-4.6v"
+"
 
 
 def _call_zhipu(
