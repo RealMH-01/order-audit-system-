@@ -24,6 +24,8 @@ from utils.config_manager import (
     reset_disclaimer,
     get_selected_model,
     get_api_key,
+    get_active_api_key,
+    get_zhipu_ocr_api_key,
     is_deep_think_enabled,
     is_audit_cancelled,
     set_cancel_audit,
@@ -32,6 +34,9 @@ from utils.config_manager import (
     MODEL_OPTIONS,
     KEY_SELECTED_MODEL,
     KEY_API_KEY,
+    KEY_DEEPSEEK_API_KEY,
+    KEY_ZHIPU_API_KEY,
+    KEY_ZHIPU_OCR_API_KEY,
     KEY_DEEP_THINK,
     KEY_CANCEL_AUDIT,
 )
@@ -548,13 +553,33 @@ def render_sidebar() -> None:
             key=KEY_SELECTED_MODEL,
         )
 
-        # ----- API 密钥输入 -----
-        st.text_input(
-            "🔑 API 密钥",
-            type="password",
-            placeholder="请输入所选模型的 API 密钥",
-            key=KEY_API_KEY,
-        )
+        # ----- API 密钥输入（每个模型独立存储，互不覆盖）-----
+        selected_model = get_selected_model()
+
+        if selected_model == "DeepSeek":
+            st.text_input(
+                "🔑 DeepSeek API 密钥",
+                type="password",
+                placeholder="请输入 DeepSeek API 密钥",
+                key=KEY_DEEPSEEK_API_KEY,
+            )
+            st.text_input(
+                "🖼️ 智谱OCR密钥（扫描件识别用，选填）",
+                type="password",
+                placeholder="如需OCR扫描件，请输入智谱API密钥",
+                key=KEY_ZHIPU_OCR_API_KEY,
+            )
+            st.markdown(
+                '<p class="hint-text">💡 扫描件PDF需要智谱GLM进行OCR识别。如不需要OCR可留空。</p>',
+                unsafe_allow_html=True,
+            )
+        elif selected_model == "智谱GLM":
+            st.text_input(
+                "🔑 智谱GLM API 密钥",
+                type="password",
+                placeholder="请输入智谱 API 密钥",
+                key=KEY_ZHIPU_API_KEY,
+            )
 
         # ----- DeepSeek 深度思考模式开关（仅 DeepSeek 时显示）-----
         if get_selected_model() == "DeepSeek":
@@ -592,7 +617,7 @@ def render_sidebar() -> None:
 
         st.markdown(
             '<p class="hint-text" style="text-align:center;">'
-            '<span class="version-tag">v3.0</span><br/><br/>'
+            '<span class="version-tag">v3.1</span><br/><br/>'
             'AI辅助审核，仅供参考<br/>'
             '支持 PDF / Word / Excel / 图片输入<br/>'
             '统一输出 Excel 格式报告</p>',
@@ -660,7 +685,7 @@ def _render_sidebar_history() -> None:
 # ============================================================
 def _handle_test_connection() -> None:
     """处理侧边栏的测试连接按钮点击。"""
-    api_key = get_api_key()
+    api_key = get_active_api_key()
     provider = get_selected_model()
 
     if not api_key or not api_key.strip():
@@ -681,13 +706,23 @@ def _handle_test_connection() -> None:
 # ============================================================
 # 文件解析预览辅助
 # ============================================================
+@st.cache_data(show_spinner=False)
+def _cached_parse_file(_file_content: bytes, filename: str) -> dict:
+    """缓存文件解析结果，避免每次 rerun 重复解析。"""
+    import io
+    buf = io.BytesIO(_file_content)
+    buf.name = filename
+    return parse_file(buf)
+
+
 def _render_single_preview(uploaded_file) -> None:
     """为单个上传文件渲染解析预览 expander。"""
     if uploaded_file is None:
         return
 
     try:
-        result = parse_file(uploaded_file)
+        file_bytes = uploaded_file.getvalue()
+        result = _cached_parse_file(file_bytes, uploaded_file.name)
     except Exception:
         st.warning(f"文件 {getattr(uploaded_file, 'name', '未知')} 解析异常，请检查文件是否完整")
         return
@@ -757,7 +792,7 @@ def _render_file_preview(uploaded, *, multi: bool) -> None:
 # ============================================================
 def _validate_audit_inputs(po_file, audit_files, result_placeholder) -> bool:
     """校验审核启动的所有前置条件，失败返回 False。"""
-    api_key = get_api_key()
+    api_key = get_active_api_key()
 
     if not api_key or not api_key.strip():
         result_placeholder.error("请先在左侧边栏中配置API密钥，然后再开始审核")
@@ -815,7 +850,7 @@ def _handle_audit_start(
     result_placeholder,
 ) -> None:
     """点击开始审核后，执行完整审核流程。"""
-    api_key = get_api_key()
+    api_key = get_active_api_key()
     provider = get_selected_model()
     deep_think = is_deep_think_enabled() and provider == "DeepSeek"
 
@@ -919,6 +954,7 @@ def _handle_audit_start(
                 progress_callback=on_progress,
                 cancel_check=check_cancel,
                 deep_think=deep_think,
+                zhipu_ocr_api_key=get_zhipu_ocr_api_key(),
             )
         except LLMError as e:
             status_container.update(label="❌ 审核出错", state="error")

@@ -211,7 +211,6 @@ _ZHIPU_TEXT_MODEL = "glm-4-flash"
 _ZHIPU_VISION_MODEL = "glm-4.6v"
 
 
-
 def _call_zhipu(
     api_key: str,
     messages: List[Dict],
