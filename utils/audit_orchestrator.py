@@ -4,6 +4,7 @@
 新增：Token 长度检测与分段处理、超时控制、细粒度进度反馈、取消审核支持。
 """
 
+import json as _json
 import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -11,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 from utils.audit_engine import (
     build_audit_prompt,
     build_cross_check_prompt,
+    build_custom_rules_review_prompt,
     parse_audit_result,
 )
 from utils.file_parser import parse_file
@@ -54,6 +56,74 @@ def _guess_doc_type(filename: str) -> str:
         if keyword in name_lower:
             return doc_type
     return "待审核单据"
+
+
+# ============================================================
+# ★ 代码层面兜底：强制修正"说了没问题却标RED"的矛盾issue
+# ============================================================
+_POSITIVE_KEYWORDS = [
+    "符合", "正常", "没有问题", "无需处理", "属于正常",
+    "这一点是符合的", "完全符合", "不构成错误",
+    "合理的", "可以接受", "无误", "无需修改",
+    "正确的", "没有错误", "属正常", "不影响",
+    "无需更改", "合规", "一致的", "匹配",
+    "集团内部正常分工", "正常的集团", "内部分工",
+    "是为了确认", "已被正确执行",
+]
+
+
+def _post_process_force_downgrade(audit_result: dict) -> dict:
+    """对审核结果做最终兜底修正。
+
+    只处理一种情况：level=RED 但 suggestion 中明确表示
+    "符合""正常""没有问题"等肯定性表述。
+
+    这种情况说明AI自己认为没问题却还标了RED，属于自相矛盾，
+    代码直接强制降级为YELLOW。
+
+    真正有错误的RED不会被误伤，因为真正的错误的suggestion
+    写的是"不一致""建议修改""请核实"等否定/提醒性表述，
+    不会命中这些肯定性关键词。
+    """
+    if not audit_result or "issues" not in audit_result:
+        return audit_result
+
+    changed = False
+    for issue in audit_result["issues"]:
+        if issue.get("level") != "RED":
+            continue
+        sugg = issue.get("suggestion", "")
+        if any(kw in sugg for kw in _POSITIVE_KEYWORDS):
+            issue["level"] = "YELLOW"
+            changed = True
+            logger.info(
+                "兜底降级: issue '%s' 从RED降为YELLOW (suggestion含肯定表述: %s)",
+                issue.get("field_name", "?"),
+                sugg[:80],
+            )
+
+    if changed:
+        # 重新编号和计数
+        reds = [i for i in audit_result["issues"] if i["level"] == "RED"]
+        yellows = [i for i in audit_result["issues"] if i["level"] == "YELLOW"]
+        blues = [i for i in audit_result["issues"] if i["level"] == "BLUE"]
+
+        for idx, issue in enumerate(reds, 1):
+            issue["id"] = f"R-{idx:02d}"
+        for idx, issue in enumerate(yellows, 1):
+            issue["id"] = f"Y-{idx:02d}"
+        for idx, issue in enumerate(blues, 1):
+            issue["id"] = f"B-{idx:02d}"
+
+        audit_result["issues"] = reds + yellows + blues
+        audit_result["summary"] = {
+            "total": len(audit_result["issues"]),
+            "red": len(reds),
+            "yellow": len(yellows),
+            "blue": len(blues),
+        }
+
+    return audit_result
 
 
 def run_full_audit(
@@ -396,16 +466,11 @@ def run_full_audit(
         )
 
         # ★ 第二轮：自定义规则修正
-        # 仅当用户设置了自定义规则时执行，避免不必要的API调用。
-        # 这样可以将“按内置规则审核”和“按自定义规则修正”拆成两个清晰的任务，
-        # 彻底消除AI在同一次调用中同时处理两套规则时产生的颜色标记自相矛盾问题。
         if audit_result is not None and custom_rules and custom_rules.strip():
             _progress(f"正在根据自定义规则修正 {fname} 的审核结果...")
             try:
-                import json as _json
                 original_json_str = _json.dumps(audit_result, ensure_ascii=False, indent=2)
 
-                from utils.audit_engine import build_custom_rules_review_prompt
                 review_messages = build_custom_rules_review_prompt(
                     original_result_json=original_json_str,
                     custom_rules=custom_rules,
@@ -415,7 +480,7 @@ def run_full_audit(
                 review_result = _call_and_parse(
                     provider, api_key, review_messages,
                     f"{fname}(自定义规则修正)", result["errors"],
-                    deep_think=False,  # 第二轮不需要深度思考，节省时间和token
+                    deep_think=False,
                 )
 
                 if review_result is not None:
@@ -427,9 +492,12 @@ def run_full_audit(
                 logger.warning("自定义规则修正异常: %s", e)
                 _progress(f"⚠️ {fname} 自定义规则修正异常，使用原始审核结果")
 
+        # ★ 第三步：代码兜底——强制修正自相矛盾的标记
+        if audit_result is not None:
+            audit_result = _post_process_force_downgrade(audit_result)
+
         elapsed_final = time.time() - start_time
         if audit_result is not None:
-            # 将原文文本附加到结果中，供报告生成使用
             audit_result["original_text"] = target_content
             result["per_file_results"][fname] = audit_result
             successful_targets.append(
@@ -466,10 +534,8 @@ def run_full_audit(
         if cross_result is not None and custom_rules and custom_rules.strip():
             _progress("正在根据自定义规则修正交叉比对结果...")
             try:
-                import json as _json
                 cross_json_str = _json.dumps(cross_result, ensure_ascii=False, indent=2)
 
-                from utils.audit_engine import build_custom_rules_review_prompt
                 review_messages = build_custom_rules_review_prompt(
                     original_result_json=cross_json_str,
                     custom_rules=custom_rules,
@@ -490,6 +556,10 @@ def run_full_audit(
             except Exception as e:
                 logger.warning("交叉比对自定义规则修正异常: %s", e)
                 _progress("⚠️ 交叉比对自定义规则修正异常，使用原始结果")
+
+        # ★ 交叉比对也做代码兜底
+        if cross_result is not None:
+            cross_result = _post_process_force_downgrade(cross_result)
 
         result["cross_check_result"] = cross_result
 
@@ -544,7 +614,6 @@ def _call_and_parse(
                 logger.warning(
                     "[%s] 第%d次尝试: JSON解析失败，准备重试", file_label, attempt
                 )
-                # 截断 assistant 回复避免 token 超限
                 truncated_response = (
                     llm_response[:500] + "..." if len(llm_response) > 500 else llm_response
                 )
