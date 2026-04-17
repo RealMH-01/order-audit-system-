@@ -58,6 +58,7 @@ from utils.history_manager import (
     get_history_records,
     get_history_count,
 )
+from utils.rules_config import BUILTIN_RULES_DISPLAY
 
 # 支持的文件类型列表（统一管理）
 ALLOWED_DOC_TYPES = ["pdf", "doc", "docx", "xlsx", "xls"]
@@ -469,15 +470,18 @@ def show_disclaimer() -> None:
             unsafe_allow_html=True,
         )
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("确认，不再提示", use_container_width=True, type="primary"):
-                accept_disclaimer()
-                st.rerun()
-        with col_b:
-            if st.button("取消，保留提示", use_container_width=True):
-                set_disclaimer_step("initial")
-                st.rerun()
+        # ★ 改动：用 columns 居中
+        _, center_col, _ = st.columns([1, 2, 1])
+        with center_col:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("确认，不再提示", use_container_width=True, type="primary"):
+                    accept_disclaimer()
+                    st.rerun()
+            with col_b:
+                if st.button("取消，保留提示", use_container_width=True):
+                    set_disclaimer_step("initial")
+                    st.rerun()
 
         st.stop()
 
@@ -505,17 +509,78 @@ def show_disclaimer() -> None:
         unsafe_allow_html=True,
     )
 
-    skip = st.checkbox("本次会话不再提示", key="_disclaimer_skip_cb")
+    # ★ 改动：用 columns 居中
+    _, center_col, _ = st.columns([1, 2, 1])
+    with center_col:
+        skip = st.checkbox("本次会话不再提示", key="_disclaimer_skip_cb")
 
-    if st.button("我已知晓，进入系统", type="primary"):
-        if skip:
-            set_disclaimer_step("confirming")
-            st.rerun()
-        else:
-            accept_disclaimer()
-            st.rerun()
+        if st.button("我已知晓，进入系统", type="primary", use_container_width=True):
+            if skip:
+                set_disclaimer_step("confirming")
+                st.rerun()
+            else:
+                accept_disclaimer()
+                st.rerun()
 
     st.stop()
+
+
+# ============================================================
+# 审核规则弹窗
+# ============================================================
+@st.dialog("📖 系统内置审核规则", width="large")
+def show_builtin_rules_dialog():
+    """以弹窗形式展示内置审核规则（只读）。"""
+    st.markdown(BUILTIN_RULES_DISPLAY)
+    st.markdown("---")
+    st.markdown(
+        '<p class="hint-text">'
+        '以上为系统内置规则摘要。AI 实际审核时会使用更详细的执行指令，'
+        '核心逻辑与上述规则一致。如需调整审核行为，请使用「编辑自定义规则」功能。'
+        '</p>',
+        unsafe_allow_html=True,
+    )
+    if st.button("关闭", use_container_width=True):
+        st.rerun()
+
+
+@st.dialog("✏️ 自定义补充审核规则", width="large")
+def show_custom_rules_dialog():
+    """以弹窗形式编辑自定义审核规则，有明确的保存/取消按钮。"""
+    st.markdown(
+        "**自定义规则的优先级高于系统内置规则**，当两者冲突时以自定义规则为准。\n\n"
+        "修改后请点击下方「保存规则」按钮使其生效。留空则不添加额外规则。"
+    )
+    st.markdown("---")
+
+    # 读取当前已保存的自定义规则作为默认值
+    current_rules = get_custom_rules() or ""
+    new_rules = st.text_area(
+        "请输入自定义审核规则",
+        value=current_rules,
+        height=400,
+        placeholder=(
+            "例如：\n"
+            "- 所有金额必须精确到小数点后两位\n"
+            "- 忽略发货地址差异\n"
+            "- 本票货物为危险品，需要特别检查UN编号\n"
+            "- 客户要求所有单据上必须显示HS Code"
+        ),
+        key="_temp_custom_rules_editor",
+    )
+
+    st.markdown("---")
+    col_save, col_cancel = st.columns(2)
+    with col_save:
+        if st.button("💾 保存规则", type="primary", use_container_width=True):
+            st.session_state[KEY_CUSTOM_RULES] = new_rules
+            st.toast("✅ 自定义规则已保存并立即生效！")
+            import time
+            time.sleep(0.8)
+            st.rerun()
+    with col_cancel:
+        if st.button("取消", use_container_width=True):
+            st.rerun()
 
 
 # ============================================================
@@ -598,51 +663,28 @@ def render_sidebar() -> None:
         # ----- 审核规则区域 -----
         st.markdown("### 📋 审核规则")
 
-        # 内置规则（只读展示）
-        with st.expander("📖 查看系统内置审核规则", expanded=False):
+        if st.button("📖 查看系统内置审核规则", use_container_width=True):
+            show_builtin_rules_dialog()
+
+        if st.button("✏️ 编辑自定义规则", use_container_width=True):
+            show_custom_rules_dialog()
+
+        # 显示当前自定义规则的状态
+        current_custom = get_custom_rules()
+        if current_custom and current_custom.strip():
+            preview_text = current_custom.strip()[:50]
+            if len(current_custom.strip()) > 50:
+                preview_text += "..."
+            st.success("✅ 已配置自定义规则")
             st.markdown(
-                '<p class="hint-text">以下为系统内置规则，不可修改。如需调整审核行为，请在下方"自定义补充规则"中添加覆盖规则。</p>',
+                f'<p class="hint-text">当前规则预览：{preview_text}</p>',
                 unsafe_allow_html=True,
             )
-            st.markdown("""
-**【核心原则】** 一切以PO为准。只有确认存在实质性错误或矛盾时才标RED。
-
-**🔴 RED（高风险）——仅限以下情况：**
-1. 金额计算实际错误（单价×数量≠总金额等）
-2. 数量明确不符
-3. 关键信息缺失或实质性矛盾（合同号不同、币种不同等）
-4. 贸易术语实质性变更（如FOB→CIF，影响费用承担和交货地点）
-5. 客户方（买方/申请人）信息与PO不一致
-6. 数字格式存在欧洲格式与英美格式歧义
-
-**🟡 YELLOW（需注意）——信息有差异但可合理解释：**
-1. 我方（卖方/受益人）地址与PO不同（公司有多个地址属正常）
-2. 计量单位不同但换算后金额一致（如KG与TON）
-3. 贸易术语相同但书写格式不同（如FOB SHANGHAI vs FOB Shanghai Port）
-4. PO中没有PO号，单据用合同号代替
-5. 某个字段在PO中找不到对应信息
-
-**🔵 BLUE（格式提醒）——不影响业务：**
-- 日期格式差异、大小写不统一、多余空格等
-
-**【数值校验】** 单价×数量=总金额、大小写金额一致、净重+皮重≈毛重
-
-**【数字格式歧义】** 欧洲格式与英美格式歧义必须标RED，不允许AI自行判断
-
-**【交叉比对】** 多份单据之间相同字段数据必须一致
-            """)
-
-        # 自定义补充规则（可编辑）
-        st.markdown(
-            '<p class="hint-text">✏️ <b>自定义补充规则</b>：在此添加额外审核规则。<b>自定义规则的优先级高于系统内置规则</b>，当两者冲突时以自定义规则为准。修改后立即生效，无需重启。留空则不添加额外规则。</p>',
-            unsafe_allow_html=True,
-        )
-        st.text_area(
-            "自定义规则",
-            height=200,
-            key=KEY_CUSTOM_RULES,
-            label_visibility="collapsed",
-        )
+        else:
+            st.markdown(
+                '<p class="hint-text">未设置自定义规则，将使用系统默认规则</p>',
+                unsafe_allow_html=True,
+            )
 
         st.divider()
 
@@ -769,6 +811,32 @@ def _render_single_preview(uploaded_file) -> None:
     except Exception:
         st.warning(f"文件 {getattr(uploaded_file, 'name', '未知')} 解析异常，请检查文件是否完整")
         return
+
+    # ★ 新增：扫描件PDF特殊预览
+    if result.get("is_scanned_pdf"):
+        filename = result["filename"]
+        page_images = result.get("pdf_page_images", [])
+        page_count = len(page_images)
+        with st.expander(f"📕 {filename} 解析预览", expanded=False):
+            st.info(
+                f"📷 检测到该PDF为扫描件（共 {page_count} 页），"
+                f"文字内容将在点击「开始审核」后通过 AI-OCR 自动识别。\n\n"
+                f"请确保已在左侧边栏填写「智谱OCR密钥」（如使用DeepSeek模型）"
+                f"或选择「智谱GLM」模型。"
+            )
+            # 显示第一页缩略图让用户确认文件上传正确
+            if page_images:
+                import base64 as _b64
+                try:
+                    first_page_bytes = _b64.b64decode(page_images[0])
+                    st.image(
+                        first_page_bytes,
+                        caption=f"第 1 页预览（共 {page_count} 页）",
+                        use_container_width=True,
+                    )
+                except Exception:
+                    st.caption("（缩略图生成失败，不影响审核功能）")
+        return  # 提前返回，不走后面的普通预览逻辑
 
     filename = result["filename"]
     is_image = result["is_image"]
@@ -1385,147 +1453,135 @@ def _render_bulk_download(all_reports: list) -> None:
 def render_main_page() -> None:
     """渲染主界面内容。"""
 
-    # ----- 标题区 -----
+    # ============================================================
+    # 主页面标题
+    # ============================================================
     st.markdown(
         '<p class="main-title">📋 外贸跟单工单智能审核系统</p>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<p class="main-subtitle">'
-        '基于AI大模型的外贸单据智能比对与审核工具 — 帮您兜住每一个问题 &nbsp;|&nbsp; '
-        '支持 PDF / Word / Excel / 图片输入，统一输出 Excel 审核报告</p>',
+        '基于AI大模型的外贸单据智能比对与审核工具 — 帮您兜住每一个问题 | '
+        '支持 PDF / Word / Excel / 图片输入，统一输出 Excel 格式报告</p>',
         unsafe_allow_html=True,
     )
 
-    # ----- 左右两栏文件上传区（均衡宽度）-----
-    col_left, col_right = st.columns([1, 1], gap="large")
+    # ============================================================
+    # 第一行：核心文件上传（PO + 待审核文件），等宽两栏
+    # ============================================================
+    col_po, col_audit = st.columns(2, gap="large")
 
-    with col_left:
+    with col_po:
         st.markdown(
-            '<p class="upload-col-title upload-col-title-left">📁 参照数据源（审核基准）</p>',
+            '<div class="upload-col-title upload-col-title-left">'
+            '📁 参照数据源（审核基准）</div>',
             unsafe_allow_html=True,
         )
-
+        st.markdown(
+            '<p class="hint-text">PO文件（必须上传）</p>',
+            unsafe_allow_html=True,
+        )
         po_file = st.file_uploader(
-            "PO文件（必须上传）",
+            "上传PO文件",
             type=ALLOWED_DOC_TYPES,
-            accept_multiple_files=False,
-            key="po_file",
-            help="PO是审核的核心依据，所有待审核单据将与PO逐字段比对。支持 PDF、Word、Excel 格式",
+            label_visibility="collapsed",
+            key="po_uploader",
         )
         _render_file_preview(po_file, multi=False)
 
-        template_file = st.file_uploader(
-            "标准模板文件（建议提供）",
-            type=ALLOWED_DOC_TYPES,
-            accept_multiple_files=False,
-            key="template_file",
-            help="公司标准格式模板，用于检查抬头、地址等固定内容",
-        )
-        _render_file_preview(template_file, multi=False)
-
-        prev_files = st.file_uploader(
-            "上一票对应文件（建议提供）",
-            type=ALLOWED_DOC_TYPES,
-            accept_multiple_files=True,
-            key="prev_files",
-            help="用于对比本票与上一票的变更情况",
-        )
-        _render_file_preview(prev_files, multi=True)
-
-        ref_images = st.file_uploader(
-            "其他参考截图（可选）",
-            type=["jpg", "png", "jpeg"],
-            accept_multiple_files=True,
-            key="ref_images",
-            help="如组长信息截图、金蝶系统截图等",
-        )
+    with col_audit:
         st.markdown(
-            '<p class="hint-text">支持 JPG/PNG 格式，审核时由AI识别内容</p>',
+            '<div class="upload-col-title upload-col-title-right">'
+            '📄 待审核文件（本票单据）</div>',
             unsafe_allow_html=True,
         )
-        _render_file_preview(ref_images, multi=True)
-
-    with col_right:
         st.markdown(
-            '<p class="upload-col-title upload-col-title-right">📋 待审核文件（本票单据）</p>',
+            '<p class="hint-text">上传本票需要审核的单据</p>',
             unsafe_allow_html=True,
         )
-
         audit_files = st.file_uploader(
-            "上传本票需要审核的单据",
-            type=ALLOWED_DOC_TYPES,
+            "上传待审核文件",
+            type=ALLOWED_DOC_TYPES + ["jpg", "png", "jpeg"],
             accept_multiple_files=True,
-            key="audit_files",
-            help="支持同时上传多份单据，如CI和PL。支持 PDF、Word、Excel 格式",
+            label_visibility="collapsed",
+            key="audit_uploader",
         )
         st.markdown(
             '<p class="hint-text">'
-            '支持 PDF / Word (.doc/.docx) / Excel (.xlsx/.xls) 格式<br/>'
+            '支持 PDF / Word (.doc/.docx) / Excel (.xlsx/.xls) 格式<br>'
             '可上传 CI、PL、托书、生产通知单、发货申请单等</p>',
             unsafe_allow_html=True,
         )
         _render_file_preview(audit_files, multi=True)
 
-    # ----- 开始审核按钮 -----
+    # ============================================================
+    # 第二行：辅助参考文件（可选），三等分
+    # ============================================================
     st.markdown("---")
+    st.markdown("**📎 辅助参考文件（可选，提供后可提升审核准确性）**")
 
-    start_audit = False
-    btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 2])
-    with btn_col2:
-        if po_file is None:
-            st.button("🔍 开始审核", use_container_width=True, disabled=True)
-            st.markdown(
-                '<p style="color:#cf1322; font-size:13px; text-align:center; font-weight:500;">请先上传PO文件</p>',
-                unsafe_allow_html=True,
-            )
-        elif not audit_files:
-            st.button("🔍 开始审核", use_container_width=True, disabled=True)
-            st.markdown(
-                '<p style="color:#d48806; font-size:13px; text-align:center; font-weight:500;">请上传待审核文件</p>',
-                unsafe_allow_html=True,
-            )
-        else:
-            # 显示深度思考模式状态
-            if is_deep_think_enabled() and get_selected_model() == "DeepSeek":
-                st.markdown(
-                    '<p style="color:#4472C4; font-size:12px; text-align:center;">🧠 深度思考模式已开启</p>',
-                    unsafe_allow_html=True,
-                )
-            start_audit = st.button(
-                "🔍 开始审核", use_container_width=True, type="primary"
-            )
+    aux_col1, aux_col2, aux_col3 = st.columns(3, gap="medium")
 
-    # ----- 审核结果占位区域 -----
-    result_placeholder = st.empty()
+    with aux_col1:
+        template_file = st.file_uploader(
+            "📋 标准模板文件（建议提供）",
+            type=ALLOWED_DOC_TYPES,
+            key="template_uploader",
+            help="上传标准模板文件，系统将对比待审核文件与模板的格式和内容差异",
+        )
+        if template_file:
+            _render_file_preview(template_file, multi=False)
 
-    # ----- 开始审核 -----
+    with aux_col2:
+        prev_files = st.file_uploader(
+            "📂 上一票对应文件（建议提供）",
+            type=ALLOWED_DOC_TYPES,
+            accept_multiple_files=True,
+            key="prev_uploader",
+            help="上传上一票的同类单据，系统将进行前后票据对比",
+        )
+        if prev_files:
+            _render_file_preview(prev_files, multi=True)
+
+    with aux_col3:
+        ref_images = st.file_uploader(
+            "🖼️ 其他参考截图（可选）",
+            type=["jpg", "png", "jpeg"],
+            accept_multiple_files=True,
+            key="ref_uploader",
+            help="如有聊天记录截图、邮件截图、客户要求截图等参考信息可在此上传",
+        )
+        if ref_images:
+            _render_file_preview(ref_images, multi=True)
+
+    # ============================================================
+    # 审核按钮 — 居中
+    # ============================================================
+    st.markdown("---")
+    _, btn_col, _ = st.columns([2, 1, 2])
+    with btn_col:
+        start_audit = st.button(
+            "🚀 开始审核",
+            type="primary",
+            use_container_width=True,
+        )
+
+    # ============================================================
+    # 审核结果区域
+    # ============================================================
+    result_placeholder = st.container()
+
     if start_audit:
         # 清除历史查看状态
         st.session_state.pop("viewing_history", None)
         _handle_audit_start(
-            po_file=po_file,
-            template_file=template_file,
-            prev_files=prev_files,
-            ref_images=ref_images,
-            audit_files=audit_files,
-            result_placeholder=result_placeholder,
+            po_file, template_file, prev_files, ref_images,
+            audit_files, result_placeholder,
         )
     elif "audit_result" in st.session_state and st.session_state["audit_result"]:
-        # 已有审核结果时重新渲染
-        with result_placeholder.container():
+        with result_placeholder:
             _render_audit_results(st.session_state["audit_result"])
-    else:
-        # 空状态提示
-        with result_placeholder.container():
-            st.markdown(
-                '<div class="empty-state">'
-                '<span class="icon">📋</span>'
-                "上传文件后点击「开始审核」即可开始<br/>"
-                '<span style="font-size:13px; color:#bbb;">左侧上传参照数据源（PO等），右侧上传待审核文件（CI、PL等）</span>'
-                "</div>",
-                unsafe_allow_html=True,
-            )
 
 
 # ============================================================
