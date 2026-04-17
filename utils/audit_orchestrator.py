@@ -67,6 +67,7 @@ def run_full_audit(
     progress_callback: Optional[Callable[[str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
     deep_think: bool = False,
+    zhipu_ocr_api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """执行完整审核流程。
 
@@ -122,13 +123,59 @@ def run_full_audit(
         result["cancelled"] = True
         return result
 
+    # ==========================================================
+    # 判断用于 OCR 的 provider 和 api_key（支持混合模式）
+    # ==========================================================
+    has_scanned_pdf = (
+        (po_data.get("is_scanned_pdf") and po_data.get("pdf_page_images"))
+        or any(t.get("is_scanned_pdf") and t.get("pdf_page_images") for t in target_files_data)
+    )
+    has_ref_images = (
+        other_refs_data
+        and any(d.get("is_image") and d.get("image_base64") for d in other_refs_data)
+    )
+    needs_ocr = has_scanned_pdf or has_ref_images
+
+    if provider.lower().strip() in ("deepseek",):
+        if needs_ocr:
+            if zhipu_ocr_api_key and zhipu_ocr_api_key.strip():
+                ocr_provider = "智谱GLM"
+                ocr_api_key = zhipu_ocr_api_key
+                _progress("检测到需要图片识别，将使用智谱GLM进行OCR，文字审核仍使用DeepSeek...")
+            else:
+                if has_scanned_pdf:
+                    error_msg = (
+                        "检测到上传的PDF为扫描件（图片型PDF），需要AI图片识别（OCR）来提取文字。"
+                        "DeepSeek不支持图片识别。请在左侧边栏填写「智谱OCR密钥」后重新审核，"
+                        "或将大模型切换为「智谱GLM」。"
+                    )
+                    _progress("❌ " + error_msg)
+                    result["errors"].append(error_msg)
+                    return result
+                else:
+                    # 参考图片OCR不是必须的，跳过即可
+                    ocr_provider = provider
+                    ocr_api_key = api_key
+                    _progress("⚠️ 参考图片需要OCR但未提供智谱OCR密钥，将跳过图片识别")
+        else:
+            ocr_provider = provider
+            ocr_api_key = api_key
+    else:
+        ocr_provider = provider
+        ocr_api_key = api_key
+
     # 处理参考图片的 OCR
     other_refs_texts: list[str] = []
     if other_refs_data:
         images_to_ocr = [
             d for d in other_refs_data if d.get("is_image") and d.get("image_base64")
         ]
-        if images_to_ocr:
+        # 如果是DeepSeek且没有提供智谱OCR密钥，跳过图片OCR
+        skip_image_ocr = (
+            provider.lower().strip() in ("deepseek",)
+            and not (zhipu_ocr_api_key and zhipu_ocr_api_key.strip())
+        )
+        if images_to_ocr and not skip_image_ocr:
             _progress(f"正在识别截图内容...（共 {len(images_to_ocr)} 张图片）")
             for img in images_to_ocr:
                 if _is_cancelled():
@@ -139,7 +186,7 @@ def run_full_audit(
                 _progress(f"正在识别: {fname}")
                 try:
                     ocr_text = call_llm_with_image(
-                        provider, api_key, IMAGE_OCR_PROMPT, img["image_base64"]
+                        ocr_provider, ocr_api_key, IMAGE_OCR_PROMPT, img["image_base64"]
                     )
                     img["content"] = ocr_text
                     other_refs_texts.append(f"[{fname}]\n{ocr_text}")
@@ -159,23 +206,6 @@ def run_full_audit(
     # 步骤 1.2：扫描件PDF自动OCR
     # ==========================================================
 
-
-        # DeepSeek 不支持图片识别，检测到扫描件时提前终止并提示
-    has_scanned_pdf = (
-        (po_data.get("is_scanned_pdf") and po_data.get("pdf_page_images"))
-        or any(t.get("is_scanned_pdf") and t.get("pdf_page_images") for t in target_files_data)
-    )
-    if has_scanned_pdf and provider.lower().strip() in ("deepseek",):
-        error_msg = (
-            "检测到上传的PDF为扫描件（图片型PDF），需要使用AI图片识别（OCR）来提取文字。"
-            "但 DeepSeek API 目前不支持图片识别功能。"
-            "请前往左侧边栏将大模型切换为「智谱GLM」，然后重新开始审核。"
-        )
-        _progress("❌ " + error_msg)
-        result["errors"].append(error_msg)
-        return result
-
-    
     # --- 处理 PO 扫描件 ---
     if po_data.get("is_scanned_pdf") and po_data.get("pdf_page_images"):
         page_images = po_data["pdf_page_images"]
@@ -191,7 +221,7 @@ def run_full_audit(
             _progress(f"正在识别PO扫描件第 {pg_idx}/{total_pages} 页...")
             try:
                 ocr_text = call_llm_with_image(
-                    provider, api_key, IMAGE_OCR_PROMPT, page_b64
+                    ocr_provider, ocr_api_key, IMAGE_OCR_PROMPT, page_b64
                 )
                 ocr_parts.append(f"{'='*20} 第 {pg_idx} 页 {'='*20}\n{ocr_text}")
             except LLMError as e:
@@ -229,7 +259,7 @@ def run_full_audit(
             _progress(f"正在识别 {t_fname} 第 {pg_idx}/{t_total_pages} 页...")
             try:
                 ocr_text = call_llm_with_image(
-                    provider, api_key, IMAGE_OCR_PROMPT, page_b64
+                    ocr_provider, ocr_api_key, IMAGE_OCR_PROMPT, page_b64
                 )
                 t_ocr_parts.append(f"{'='*20} 第 {pg_idx} 页 {'='*20}\n{ocr_text}")
                 all_failed = False
@@ -354,13 +384,6 @@ def run_full_audit(
             deep_think=deep_think,
         )
 
-        # 计算已耗时并更新进度
-        elapsed = time.time() - start_time
-        _progress(
-            f"正在审核第 {idx}/{total_files} 份文件：{fname}"
-            f"（已耗时 {int(elapsed)} 秒）"
-        )
-
         # 调用大模型（含自动重试）
         audit_result = _call_and_parse(
             provider, api_key, messages, fname, result["errors"],
@@ -437,8 +460,11 @@ def _call_and_parse(
     """
     for attempt in range(1, max_retries + 1):
         try:
-            if progress_callback and attempt > 1:
-                progress_callback(f"第 {attempt} 次尝试...")
+            if progress_callback:
+                if attempt == 1:
+                    progress_callback("正在等待AI响应...")
+                else:
+                    progress_callback(f"第 {attempt} 次重试...")
 
             llm_response = call_llm(
                 provider, api_key, messages,
@@ -454,9 +480,12 @@ def _call_and_parse(
                 logger.warning(
                     "[%s] 第%d次尝试: JSON解析失败，准备重试", file_label, attempt
                 )
-                # 追加一条重试消息
+                # 截断 assistant 回复避免 token 超限
+                truncated_response = (
+                    llm_response[:500] + "..." if len(llm_response) > 500 else llm_response
+                )
                 messages = messages + [
-                    {"role": "assistant", "content": llm_response},
+                    {"role": "assistant", "content": truncated_response},
                     {
                         "role": "user",
                         "content": (

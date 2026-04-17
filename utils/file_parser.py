@@ -239,6 +239,18 @@ def _pdf_to_images_base64(file, dpi: int = 200, max_pages: int = 10) -> List[str
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        # 检查图片大小，如果超过 4MB 则降低质量重试
+        if len(b64) > 4 * 1024 * 1024:
+            logger.warning("第%d页图片过大(%d bytes)，尝试降低分辨率", i + 1, len(b64))
+            # 缩小图片尺寸
+            max_dim = 2000
+            if img.width > max_dim or img.height > max_dim:
+                img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=80)
+            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
         result.append(b64)
     return result
 
@@ -461,9 +473,22 @@ def parse_file(file) -> Dict[str, Any]:
     # Excel (.xlsx / .xls)
     elif ext in ("xlsx", "xls"):
         result["type"] = "xlsx"
-        content = parse_xlsx(file)
-        result["content"] = content
-        result["success"] = not content.startswith("[解析失败]")
+        if ext == "xls":
+            # openpyxl 不支持 .xls 格式，尝试解析，失败则提示
+            try:
+                content = parse_xlsx(file)
+                result["content"] = content
+                result["success"] = not content.startswith("[解析失败]")
+            except Exception:
+                result["content"] = (
+                    "[提示] 该文件为旧版 .xls 格式，当前程序无法直接解析。\n"
+                    "建议您用 Excel 或 WPS 将文件另存为 .xlsx 格式后重新上传。"
+                )
+                result["success"] = False
+        else:
+            content = parse_xlsx(file)
+            result["content"] = content
+            result["success"] = not content.startswith("[解析失败]")
 
     # 图片
     elif ext in ("jpg", "jpeg", "png"):

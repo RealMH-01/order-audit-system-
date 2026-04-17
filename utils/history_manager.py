@@ -4,6 +4,7 @@
 历史记录仅在当前会话有效，刷新页面后将清空。
 """
 
+import copy
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -33,8 +34,13 @@ def add_history_record(
     """
     _ensure_history_initialized()
 
-    per_file = audit_result.get("per_file_results", {})
-    cross_check = audit_result.get("cross_check_result")
+    # 存入历史时去掉大文本字段，节省内存
+    cleaned_result = copy.deepcopy(audit_result)
+    for fname, res in cleaned_result.get("per_file_results", {}).items():
+        res.pop("original_text", None)
+
+    per_file = cleaned_result.get("per_file_results", {})
+    cross_check = cleaned_result.get("cross_check_result")
 
     total_red = 0
     total_yellow = 0
@@ -60,7 +66,7 @@ def add_history_record(
         "total_yellow": total_yellow,
         "total_blue": total_blue,
         "total_issues": total_red + total_yellow + total_blue,
-        "audit_result": audit_result,
+        "audit_result": cleaned_result,
     }
 
     st.session_state[KEY_AUDIT_HISTORY].append(record)

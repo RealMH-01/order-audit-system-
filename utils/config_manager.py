@@ -18,6 +18,9 @@ KEY_DISCLAIMER_SKIP = "disclaimer_skip"
 KEY_DISCLAIMER_CONFIRM_STEP = "disclaimer_confirm_step"
 KEY_SELECTED_MODEL = "selected_model"
 KEY_API_KEY = "api_key"
+KEY_DEEPSEEK_API_KEY = "deepseek_api_key"
+KEY_ZHIPU_API_KEY = "zhipu_api_key"
+KEY_ZHIPU_OCR_API_KEY = "zhipu_ocr_api_key"
 KEY_DEEP_THINK = "deep_think_enabled"
 KEY_AUDIT_HISTORY = "audit_history"
 KEY_CANCEL_AUDIT = "cancel_audit"
@@ -35,6 +38,9 @@ def init_session_state() -> None:
         KEY_DISCLAIMER_CONFIRM_STEP: "initial",  # 免责声明流程阶段
         KEY_SELECTED_MODEL: DEFAULT_MODEL,
         KEY_API_KEY: "",
+        KEY_DEEPSEEK_API_KEY: "",
+        KEY_ZHIPU_API_KEY: "",
+        KEY_ZHIPU_OCR_API_KEY: "",
         KEY_DEEP_THINK: False,           # DeepSeek 深度思考模式
         KEY_AUDIT_HISTORY: [],           # 审核历史记录列表
         KEY_CANCEL_AUDIT: False,         # 取消审核标志
@@ -104,6 +110,40 @@ def get_api_key() -> str:
 
 def set_api_key(key: str) -> None:
     st.session_state[KEY_API_KEY] = key
+
+
+def get_deepseek_api_key() -> str:
+    return st.session_state.get(KEY_DEEPSEEK_API_KEY, "")
+
+
+def set_deepseek_api_key(key: str) -> None:
+    st.session_state[KEY_DEEPSEEK_API_KEY] = key
+
+
+def get_zhipu_api_key() -> str:
+    return st.session_state.get(KEY_ZHIPU_API_KEY, "")
+
+
+def set_zhipu_api_key(key: str) -> None:
+    st.session_state[KEY_ZHIPU_API_KEY] = key
+
+
+def get_zhipu_ocr_api_key() -> str:
+    return st.session_state.get(KEY_ZHIPU_OCR_API_KEY, "")
+
+
+def set_zhipu_ocr_api_key(key: str) -> None:
+    st.session_state[KEY_ZHIPU_OCR_API_KEY] = key
+
+
+def get_active_api_key() -> str:
+    """根据当前选择的模型，返回对应的 API 密钥。"""
+    model = get_selected_model()
+    if model == "DeepSeek":
+        return get_deepseek_api_key()
+    elif model == "智谱GLM":
+        return get_zhipu_api_key()
+    return ""
 
 
 # ============================================================
