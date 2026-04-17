@@ -203,6 +203,12 @@ UN编号/危险品等级/包装组别、银行信息、币种。
    就不能标RED。
 3. 一个issue的level（颜色）必须和suggestion（建议文字）的语气一致。
    如果建议文字表达的是"这是正常的""符合规则"，那颜色不能是RED。
+4. 当你在suggestion中写出"应标YELLOW"或"降级为YELLOW"等结论时，
+   你输出的JSON中该issue的level字段必须填写"YELLOW"而不是"RED"。
+   你的JSON输出必须与你自己的分析结论完全一致，不允许分析说降级但JSON仍填RED。
+5. 在输出JSON之前，请逐条检查每个issue：如果suggestion文字中包含
+   "不标红""降级""应为YELLOW""不构成实质性错误"等表述，
+   则该issue的level必须是YELLOW或BLUE，绝对不能是RED。
 
 【输出格式——严格按以下JSON格式输出，不要有任何其他文字】
 {
