@@ -497,6 +497,24 @@ def _validate_audit_result(data: Dict) -> Optional[Dict]:
         issue["level"] = issue["level"].upper()
         if issue["level"] not in ("RED", "YELLOW", "BLUE"):
             issue["level"] = "YELLOW"
+
+        # ★ 兜底：检测 suggestion 与 level 自相矛盾的情况
+        if issue["level"] == "RED":
+            sugg = issue.get("suggestion", "").lower()
+            downgrade_keywords = [
+                "降级", "应为yellow", "应标yellow", "不标红", "不应标红",
+                "从red降", "red降级为yellow", "不构成实质性错误",
+                "属于正常", "符合规则", "符合自定义规则",
+            ]
+            if any(kw in sugg for kw in downgrade_keywords):
+                issue["level"] = "YELLOW"
+                # 清理 suggestion 中多余的降级说明
+                issue["suggestion"] = issue["suggestion"].replace(
+                    "将此问题从RED降级为YELLOW。", ""
+                ).replace(
+                    "因此，将此问题从RED降级为YELLOW，", ""
+                ).strip()
+
         valid_issues.append(issue)
 
     data["issues"] = valid_issues
