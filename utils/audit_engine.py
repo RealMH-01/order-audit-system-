@@ -63,6 +63,8 @@ def build_audit_prompt(
         template_text: 标准模板的解析文本（可选）。
         other_refs: 其他参考信息文本列表（可选）。
         deep_think: 是否启用深度思考模式。
+        custom_rules: 【已废弃】自定义规则改为第二轮单独处理，此处不再注入。
+                      参数保留仅为兼容历史调用方，不会被使用。
 
     Returns:
         可直接传给 call_llm 的 messages 列表。
@@ -99,9 +101,10 @@ def build_audit_prompt(
     )
     parts.append(rules)
 
-    # 注入用户自定义审核规则
-    if custom_rules and custom_rules.strip():
-        parts.append(f"\n【用户自定义补充规则——必须严格遵守，优先级高于以上通用规则】\n{custom_rules.strip()}")
+    # 注：自定义规则不再在此处注入。
+    # 为避免AI在同一次调用中同时处理内置规则与自定义规则时产生的
+    # 颜色标记自相矛盾问题，自定义规则已改为第二轮单独处理（见
+    # build_custom_rules_review_prompt 和 audit_orchestrator 的两轮调度）。
 
     user_content = "\n".join(parts)
 
@@ -193,23 +196,6 @@ UN编号/危险品等级/包装组别、银行信息、币种。
 - 错误示例："错误：金额不正确"
 - 不确定时："此处与上一票不同，请确认是否为客户新要求"
 
-【规则冲突处理原则——必须严格遵守】
-当用户自定义规则与系统内置规则对同一字段产生不同判断时：
-1. 如果自定义规则明确说某种情况是"正常"或"允许"或"必须如此"，
-   且当前单据符合自定义规则的要求，则该字段不得标RED。
-   最多标YELLOW简要说明情况，或直接不标记。
-2. 不允许出现"符合规则但标RED引起注意"这种自相矛盾的标记。
-   RED只用于实质性错误，如果你自己分析出"不构成实质性错误"，
-   就不能标RED。
-3. 一个issue的level（颜色）必须和suggestion（建议文字）的语气一致。
-   如果建议文字表达的是"这是正常的""符合规则"，那颜色不能是RED。
-4. 当你在suggestion中写出"应标YELLOW"或"降级为YELLOW"等结论时，
-   你输出的JSON中该issue的level字段必须填写"YELLOW"而不是"RED"。
-   你的JSON输出必须与你自己的分析结论完全一致，不允许分析说降级但JSON仍填RED。
-5. 在输出JSON之前，请逐条检查每个issue：如果suggestion文字中包含
-   "不标红""降级""应为YELLOW""不构成实质性错误"等表述，
-   则该issue的level必须是YELLOW或BLUE，绝对不能是RED。
-
 【输出格式——严格按以下JSON格式输出，不要有任何其他文字】
 {
   "summary": {
@@ -251,6 +237,10 @@ def build_cross_check_prompt(
     Args:
         all_parsed_targets: 列表，每个元素是
             {"type": 单据类型, "content": 解析文本}
+
+    Args (续):
+        custom_rules: 【已废弃】自定义规则改为第二轮单独处理，此处不再注入。
+                      参数保留仅为兼容历史调用方，不会被使用。
 
     Returns:
         可直接传给 call_llm 的 messages 列表。
@@ -312,14 +302,94 @@ def build_cross_check_prompt(
 
 如果所有单据之间数据完全一致，返回 issues 为空列表，summary 各项为 0。""")
 
-    # 注入用户自定义审核规则
-    if custom_rules and custom_rules.strip():
-        parts.append(f"\n【用户自定义补充规则——必须严格遵守，优先级高于以上通用规则】\n{custom_rules.strip()}")
+    # 注：自定义规则不再在此处注入（同 build_audit_prompt），
+    # 改为第二轮由 build_custom_rules_review_prompt 单独处理。
 
     user_content = "\n".join(parts)
 
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+
+# ============================================================
+# 第二轮：自定义规则修正 prompt 构造
+# ============================================================
+_CUSTOM_RULES_REVIEW_SYSTEM_PROMPT = """你是一个审核结果修正助手。你的任务是根据用户提供的自定义规则，对一份已有的审核结果进行修正。
+
+你会收到两样东西：
+1. 一份由系统内置规则生成的原始审核结果（JSON格式）
+2. 用户设置的自定义补充规则
+
+你需要根据自定义规则，逐条审查原始审核结果中的每个issue，做出以下判断之一：
+- KEEP：保持不变（自定义规则与此issue无关）
+- UPGRADE：升级严重程度（如YELLOW→RED，自定义规则要求更严格）
+- DOWNGRADE：降级严重程度（如RED→YELLOW，自定义规则说某种情况属于正常）
+- DELETE：删除此issue（自定义规则说这种情况完全不需要标记）
+- 如果自定义规则要求检查的内容在原始结果中没有出现，则新增issue
+
+【关键原则】
+- 自定义规则拥有绝对优先权，当自定义规则与原始结果矛盾时，以自定义规则为准
+- 你只负责根据自定义规则做修正，不要重新执行内置规则的审核逻辑
+- 你的输出必须是修正后的完整审核结果JSON，格式与原始结果完全一致
+- 修正后的suggestion应清晰说明修正原因（如"根据自定义规则，此情况属于正常操作"）
+- 不要在suggestion中出现"降级""升级"等元描述，直接给出修正后的业务建议"""
+
+
+def build_custom_rules_review_prompt(
+    original_result_json: str,
+    custom_rules: str,
+    target_filename: str,
+) -> List[Dict[str, str]]:
+    """构造第二轮自定义规则修正的 prompt。
+
+    Args:
+        original_result_json: 第一轮审核输出的完整JSON字符串。
+        custom_rules: 用户设置的自定义审核规则文本。
+        target_filename: 被审核的文件名（用于上下文说明）。
+
+    Returns:
+        可直接传给 call_llm 的 messages 列表。
+    """
+    user_content = f"""【被审核文件】{target_filename}
+
+【原始审核结果（由系统内置规则生成）】
+{original_result_json}
+
+【用户自定义补充规则】
+{custom_rules}
+
+请根据自定义规则对上述审核结果进行修正。
+如果自定义规则与某些issue无关，保持原样即可。
+如果所有issue都不需要修正且不需要新增，直接原样输出即可。
+
+输出格式必须与原始结果完全一致：
+{{
+  "summary": {{
+    "total": 总标记数,
+    "red": 红色数量,
+    "yellow": 黄色数量,
+    "blue": 蓝色数量
+  }},
+  "issues": [
+    {{
+      "id": "编号",
+      "level": "RED/YELLOW/BLUE",
+      "field_name": "字段名",
+      "field_location": "位置",
+      "your_value": "单据值",
+      "source_value": "源值",
+      "source": "数据来源",
+      "suggestion": "修正后的建议"
+    }}
+  ]
+}}
+
+严格输出JSON，不要有任何其他文字。"""
+
+    return [
+        {"role": "system", "content": _CUSTOM_RULES_REVIEW_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
 
@@ -497,23 +567,6 @@ def _validate_audit_result(data: Dict) -> Optional[Dict]:
         issue["level"] = issue["level"].upper()
         if issue["level"] not in ("RED", "YELLOW", "BLUE"):
             issue["level"] = "YELLOW"
-
-        # ★ 兜底：检测 suggestion 与 level 自相矛盾的情况
-        if issue["level"] == "RED":
-            sugg = issue.get("suggestion", "").lower()
-            downgrade_keywords = [
-                "降级", "应为yellow", "应标yellow", "不标红", "不应标红",
-                "从red降", "red降级为yellow", "不构成实质性错误",
-                "属于正常", "符合规则", "符合自定义规则",
-            ]
-            if any(kw in sugg for kw in downgrade_keywords):
-                issue["level"] = "YELLOW"
-                # 清理 suggestion 中多余的降级说明
-                issue["suggestion"] = issue["suggestion"].replace(
-                    "将此问题从RED降级为YELLOW。", ""
-                ).replace(
-                    "因此，将此问题从RED降级为YELLOW，", ""
-                ).strip()
 
         valid_issues.append(issue)
 

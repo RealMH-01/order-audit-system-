@@ -395,6 +395,38 @@ def run_full_audit(
             ),
         )
 
+        # ★ 第二轮：自定义规则修正
+        # 仅当用户设置了自定义规则时执行，避免不必要的API调用。
+        # 这样可以将“按内置规则审核”和“按自定义规则修正”拆成两个清晰的任务，
+        # 彻底消除AI在同一次调用中同时处理两套规则时产生的颜色标记自相矛盾问题。
+        if audit_result is not None and custom_rules and custom_rules.strip():
+            _progress(f"正在根据自定义规则修正 {fname} 的审核结果...")
+            try:
+                import json as _json
+                original_json_str = _json.dumps(audit_result, ensure_ascii=False, indent=2)
+
+                from utils.audit_engine import build_custom_rules_review_prompt
+                review_messages = build_custom_rules_review_prompt(
+                    original_result_json=original_json_str,
+                    custom_rules=custom_rules,
+                    target_filename=fname,
+                )
+
+                review_result = _call_and_parse(
+                    provider, api_key, review_messages,
+                    f"{fname}(自定义规则修正)", result["errors"],
+                    deep_think=False,  # 第二轮不需要深度思考，节省时间和token
+                )
+
+                if review_result is not None:
+                    audit_result = review_result
+                    _progress(f"✅ {fname} 自定义规则修正完成")
+                else:
+                    _progress(f"⚠️ {fname} 自定义规则修正失败，使用原始审核结果")
+            except Exception as e:
+                logger.warning("自定义规则修正异常: %s", e)
+                _progress(f"⚠️ {fname} 自定义规则修正异常，使用原始审核结果")
+
         elapsed_final = time.time() - start_time
         if audit_result is not None:
             # 将原文文本附加到结果中，供报告生成使用
@@ -428,8 +460,38 @@ def run_full_audit(
             deep_think=deep_think,
         )
         cross_elapsed = time.time() - cross_start
-        result["cross_check_result"] = cross_result
         _progress(f"✅ 交叉比对完成（耗时 {int(cross_elapsed)} 秒）")
+
+        # ★ 交叉比对的自定义规则修正（第二轮）
+        if cross_result is not None and custom_rules and custom_rules.strip():
+            _progress("正在根据自定义规则修正交叉比对结果...")
+            try:
+                import json as _json
+                cross_json_str = _json.dumps(cross_result, ensure_ascii=False, indent=2)
+
+                from utils.audit_engine import build_custom_rules_review_prompt
+                review_messages = build_custom_rules_review_prompt(
+                    original_result_json=cross_json_str,
+                    custom_rules=custom_rules,
+                    target_filename="交叉比对",
+                )
+
+                review_cross = _call_and_parse(
+                    provider, api_key, review_messages,
+                    "交叉比对(自定义规则修正)", result["errors"],
+                    deep_think=False,
+                )
+
+                if review_cross is not None:
+                    cross_result = review_cross
+                    _progress("✅ 交叉比对自定义规则修正完成")
+                else:
+                    _progress("⚠️ 交叉比对自定义规则修正失败，使用原始结果")
+            except Exception as e:
+                logger.warning("交叉比对自定义规则修正异常: %s", e)
+                _progress("⚠️ 交叉比对自定义规则修正异常，使用原始结果")
+
+        result["cross_check_result"] = cross_result
 
     _progress("审核完成！")
     return result
