@@ -4,13 +4,11 @@
 
 部署目标：Streamlit Community Cloud
 
-v3.0 新增功能：
-- Token 长度检测与分段处理
-- 超时处理与进度反馈优化
-- 审核历史记录
-- PDF 表格解析优化
-- DeepSeek 深度思考模式
-- 数字格式歧义检测
+v3.2 更新：
+- 新增自定义审核规则功能（侧边栏可编辑，优先级高于内置规则）
+- 前端界面全面美化（现代SaaS风格）
+- 支持集团关联公司识别、COA匹配规则
+- 内置规则透明展示（侧边栏只读查看）
 """
 
 import streamlit as st
@@ -31,6 +29,8 @@ from utils.config_manager import (
     set_cancel_audit,
     get_token_warning,
     set_token_warning,
+    get_custom_rules,
+    KEY_CUSTOM_RULES,
     MODEL_OPTIONS,
     KEY_SELECTED_MODEL,
     KEY_API_KEY,
@@ -82,153 +82,158 @@ init_session_state()
 st.markdown(
     """
     <style>
-    /* ---- 全局字体与背景 ---- */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
+    /* ---- 全局 ---- */
     .stApp {
-        background: linear-gradient(180deg, #f0f4f8 0%, #ffffff 100%);
+        background: #FAFBFC;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
     }
 
-    /* ---- 免责声明卡片 ---- */
+    /* ---- 免责声明 ---- */
     .disclaimer-box {
-        background: linear-gradient(135deg, #fffef5 0%, #fff9e6 100%);
-        border: 1px solid #ffe58f;
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
         border-radius: 16px;
-        padding: 36px 42px;
-        margin: 24px auto;
-        max-width: 720px;
-        box-shadow: 0 4px 20px rgba(212, 136, 6, 0.08);
+        padding: 40px 48px;
+        margin: 40px auto;
+        max-width: 640px;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.06);
     }
     .disclaimer-box h3 {
         text-align: center;
-        color: #d48806;
-        margin-bottom: 20px;
-        font-size: 22px;
-        letter-spacing: 1px;
+        color: #111827;
+        margin-bottom: 24px;
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0;
     }
     .disclaimer-box p {
-        color: #444;
-        line-height: 1.9;
+        color: #4B5563;
+        line-height: 1.85;
         font-size: 15px;
     }
 
-    /* ---- 二级确认卡片 ---- */
+    /* ---- 二级确认 ---- */
     .confirm-box {
-        background: linear-gradient(135deg, #fff5f5 0%, #fff0f0 100%);
-        border: 1px solid #ffccc7;
+        background: #FEF2F2;
+        border: 1px solid #FECACA;
         border-radius: 16px;
-        padding: 28px 34px;
-        margin: 24px auto;
-        max-width: 660px;
-        box-shadow: 0 4px 20px rgba(207, 19, 34, 0.06);
+        padding: 32px 40px;
+        margin: 40px auto;
+        max-width: 600px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.04);
+    }
+    .confirm-box h3 {
+        text-align: center;
+        color: #DC2626;
+        font-size: 20px;
+        font-weight: 700;
     }
     .confirm-box p {
-        color: #444;
-        line-height: 1.9;
+        color: #4B5563;
+        line-height: 1.85;
         font-size: 15px;
     }
 
-    /* ---- 页面主标题 ---- */
+    /* ---- 页面标题 ---- */
     .main-title {
-        font-size: 32px;
+        font-size: 28px;
         font-weight: 700;
-        color: #1a1a2e;
+        color: #111827;
         margin-bottom: 4px;
-        letter-spacing: 0.5px;
+        letter-spacing: -0.3px;
     }
     .main-subtitle {
-        color: #6b7280;
-        font-size: 15px;
-        margin-top: -6px;
-        margin-bottom: 28px;
+        color: #9CA3AF;
+        font-size: 14px;
+        margin-top: -4px;
+        margin-bottom: 32px;
         font-weight: 400;
     }
 
     /* ---- 上传区栏标题 ---- */
     .upload-col-title {
-        font-size: 17px;
-        font-weight: 700;
+        font-size: 15px;
+        font-weight: 600;
         margin-bottom: 12px;
-        padding: 12px 16px;
+        padding: 10px 16px;
         border-radius: 10px;
         color: #fff;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.3px;
     }
     .upload-col-title-left {
-        background: linear-gradient(135deg, #4472C4 0%, #2b5ea7 100%);
+        background: #4F46E5;
     }
     .upload-col-title-right {
-        background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
+        background: #10B981;
     }
 
-    /* ---- 灰色小字提示 ---- */
+    /* ---- 提示文字 ---- */
     .hint-text {
-        color: #9ca3af;
+        color: #9CA3AF;
         font-size: 13px;
         line-height: 1.6;
     }
 
-    /* ---- 空状态提示 ---- */
+    /* ---- 空状态 ---- */
     .empty-state {
         text-align: center;
-        padding: 56px 28px;
-        color: #9ca3af;
-        font-size: 16px;
-        border: 2px dashed #d1d5db;
-        border-radius: 16px;
-        margin: 28px 0;
-        background: linear-gradient(180deg, #fafbfc 0%, #f3f4f6 100%);
+        padding: 48px 24px;
+        color: #9CA3AF;
+        font-size: 15px;
+        border: 2px dashed #D1D5DB;
+        border-radius: 12px;
+        margin: 24px 0;
+        background: #FFFFFF;
     }
     .empty-state .icon {
-        font-size: 48px;
+        font-size: 40px;
         display: block;
         margin-bottom: 12px;
     }
 
     /* ---- 结果区标题 ---- */
     .result-section-title {
-        font-size: 20px;
+        font-size: 18px;
         font-weight: 700;
-        color: #1a1a2e;
-        margin-top: 20px;
-        margin-bottom: 10px;
-        padding-bottom: 10px;
-        border-bottom: 3px solid #4472C4;
+        color: #111827;
+        margin-top: 16px;
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #4F46E5;
         display: inline-block;
     }
 
-    /* ---- 下载区域分隔与视觉 ---- */
+    /* ---- 下载区域 ---- */
     .download-section {
         margin-top: 16px;
         padding-top: 16px;
-        border-top: 1px dashed #e5e7eb;
+        border-top: 1px dashed #E5E7EB;
     }
     .download-area {
-        background: linear-gradient(135deg, #f8fafc 0%, #eef2f7 100%);
-        border: 1px solid #e2e8f0;
-        border-radius: 16px;
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 12px;
         padding: 24px 28px;
         margin-top: 20px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.03);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
 
     /* ---- 统计卡片 ---- */
     .stat-card {
-        background: #fff;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 12px;
         padding: 20px 16px;
         text-align: center;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.04);
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        transition: border-color 0.2s ease;
     }
     .stat-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+        border-color: #C7D2FE;
     }
     .stat-card .label {
         font-size: 13px;
-        color: #9ca3af;
+        color: #9CA3AF;
         margin-bottom: 6px;
         font-weight: 500;
     }
@@ -238,36 +243,35 @@ st.markdown(
         letter-spacing: -1px;
     }
 
-    /* ---- 问题卡片样式增强 ---- */
+    /* ---- 问题卡片 ---- */
     .issue-card {
         border-radius: 10px;
         padding: 14px 18px;
         margin: 10px 0;
-        transition: transform 0.15s ease;
+        transition: box-shadow 0.15s ease;
     }
     .issue-card:hover {
-        transform: translateX(4px);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
 
     /* ---- 历史记录卡片 ---- */
     .history-card {
-        background: #fff;
-        border: 1px solid #e5e7eb;
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
         border-radius: 10px;
         padding: 12px 16px;
         margin: 8px 0;
-        transition: all 0.2s ease;
+        transition: border-color 0.2s ease;
     }
     .history-card:hover {
-        border-color: #4472C4;
-        box-shadow: 0 2px 8px rgba(68,114,196,0.15);
+        border-color: #4F46E5;
     }
 
-    /* ---- 隐藏 Streamlit 默认元素 ---- */
+    /* ---- 隐藏默认元素 ---- */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 
-    /* ---- 按钮统一样式增强 ---- */
+    /* ---- 按钮 ---- */
     .stButton > button {
         border-radius: 10px;
         font-weight: 600;
@@ -277,8 +281,7 @@ st.markdown(
         letter-spacing: 0.3px;
     }
     .stButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
     .stDownloadButton > button {
         border-radius: 10px;
@@ -288,160 +291,149 @@ st.markdown(
         letter-spacing: 0.3px;
     }
     .stDownloadButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
 
-    /* ---- 侧边栏增强 ---- */
+    /* ---- 侧边栏 ---- */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        background: #1E1E2E;
     }
-
-    /* 侧边栏内所有文字统一浅色 */
     section[data-testid="stSidebar"] * {
-        color: #e2e8f0 !important;
+        color: #E2E8F0 !important;
     }
-
-    /* 标题稍微亮一点 */
     section[data-testid="stSidebar"] .stMarkdown h3 {
-        color: #f1f5f9 !important;
+        color: #F1F5F9 !important;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
     }
-
-    /* 提示性小字 */
     section[data-testid="stSidebar"] .stMarkdown p,
     section[data-testid="stSidebar"] .hint-text {
-        color: #94a3b8 !important;
+        color: #94A3B8 !important;
     }
-
-    /* 分割线 */
     section[data-testid="stSidebar"] .stDivider,
     section[data-testid="stSidebar"] hr {
-        border-color: rgba(255,255,255,0.12) !important;
+        border-color: rgba(255,255,255,0.08) !important;
     }
 
-    /* 输入框：深底浅字 */
+    /* 侧边栏输入框 */
     section[data-testid="stSidebar"] input,
     section[data-testid="stSidebar"] .stTextInput input,
     section[data-testid="stSidebar"] .stTextInput > div,
-    section[data-testid="stSidebar"] .stTextInput > div > div {
-        background-color: rgba(255,255,255,0.07) !important;
-        color: #f1f5f9 !important;
-        border-color: rgba(255,255,255,0.18) !important;
-        caret-color: #e2e8f0 !important;
+    section[data-testid="stSidebar"] .stTextInput > div > div,
+    section[data-testid="stSidebar"] textarea,
+    section[data-testid="stSidebar"] .stTextArea textarea,
+    section[data-testid="stSidebar"] .stTextArea > div {
+        background-color: rgba(255,255,255,0.06) !important;
+        color: #F1F5F9 !important;
+        border-color: rgba(255,255,255,0.12) !important;
+        caret-color: #E2E8F0 !important;
+        border-radius: 8px !important;
     }
-
-    /* 输入框获得焦点时边框高亮 */
     section[data-testid="stSidebar"] .stTextInput input:focus,
-    section[data-testid="stSidebar"] .stTextInput > div:focus-within {
-        border-color: rgba(68,114,196,0.7) !important;
-        box-shadow: 0 0 0 1px rgba(68,114,196,0.4) !important;
+    section[data-testid="stSidebar"] .stTextInput > div:focus-within,
+    section[data-testid="stSidebar"] .stTextArea textarea:focus,
+    section[data-testid="stSidebar"] .stTextArea > div:focus-within {
+        border-color: #4F46E5 !important;
+        box-shadow: 0 0 0 1px rgba(79,70,229,0.4) !important;
     }
 
-    /* 密码输入框右侧的眼睛按钮 */
+    /* 侧边栏密码眼睛按钮 */
     section[data-testid="stSidebar"] .stTextInput button {
         background: transparent !important;
-        color: #94a3b8 !important;
+        color: #94A3B8 !important;
         border: none !important;
     }
     section[data-testid="stSidebar"] .stTextInput button:hover {
-        color: #e2e8f0 !important;
-        background: rgba(255,255,255,0.1) !important;
+        color: #E2E8F0 !important;
+        background: rgba(255,255,255,0.08) !important;
     }
 
-    /* 下拉选择框 */
+    /* 侧边栏下拉框 */
     section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"],
     section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div {
-        background-color: rgba(255,255,255,0.07) !important;
-        color: #f1f5f9 !important;
-        border-color: rgba(255,255,255,0.18) !important;
+        background-color: rgba(255,255,255,0.06) !important;
+        color: #F1F5F9 !important;
+        border-color: rgba(255,255,255,0.12) !important;
+        border-radius: 8px !important;
     }
     section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] * {
-        color: #f1f5f9 !important;
+        color: #F1F5F9 !important;
     }
-
-    /* 下拉菜单弹出层 */
     section[data-testid="stSidebar"] [data-baseweb="popover"],
     section[data-testid="stSidebar"] [data-baseweb="menu"],
     section[data-testid="stSidebar"] [role="listbox"],
     section[data-testid="stSidebar"] [role="option"] {
-        background-color: #1e2a3a !important;
-        color: #e2e8f0 !important;
+        background-color: #272741 !important;
+        color: #E2E8F0 !important;
     }
     section[data-testid="stSidebar"] [role="option"]:hover {
-        background-color: rgba(68,114,196,0.3) !important;
+        background-color: rgba(79,70,229,0.25) !important;
     }
 
-    /* 输入框 placeholder */
-    section[data-testid="stSidebar"] input::placeholder {
-        color: #5a6578 !important;
+    /* 侧边栏 placeholder */
+    section[data-testid="stSidebar"] input::placeholder,
+    section[data-testid="stSidebar"] textarea::placeholder {
+        color: #64748B !important;
     }
 
-
-    /* 按钮样式适配深色背景 */
+    /* 侧边栏按钮 */
     section[data-testid="stSidebar"] .stButton > button {
-        background: rgba(255,255,255,0.1) !important;
-        color: #e2e8f0 !important;
-        border: 1px solid rgba(255,255,255,0.2) !important;
+        background: rgba(79,70,229,0.15) !important;
+        color: #A5B4FC !important;
+        border: 1px solid rgba(79,70,229,0.3) !important;
+        border-radius: 8px !important;
     }
     section[data-testid="stSidebar"] .stButton > button:hover {
-        background: rgba(255,255,255,0.18) !important;
-        color: #ffffff !important;
+        background: rgba(79,70,229,0.3) !important;
+        color: #C7D2FE !important;
     }
 
-    /* Toggle 开关标签 */
+    /* 侧边栏 toggle / checkbox / expander */
     section[data-testid="stSidebar"] .stToggle label span,
     section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] {
-        color: #e2e8f0 !important;
+        color: #E2E8F0 !important;
     }
-
-    /* Expander 标题 */
     section[data-testid="stSidebar"] .streamlit-expanderHeader,
     section[data-testid="stSidebar"] details summary span {
-        color: #e2e8f0 !important;
+        color: #E2E8F0 !important;
     }
-
-    /* Expander 展开内容区域 */
     section[data-testid="stSidebar"] details > div {
-        background: rgba(255,255,255,0.05) !important;
+        background: rgba(255,255,255,0.03) !important;
         border-radius: 8px;
     }
-
-    /* Checkbox 标签 */
     section[data-testid="stSidebar"] .stCheckbox label span {
-        color: #e2e8f0 !important;
+        color: #E2E8F0 !important;
     }
-
-    /* 成功/错误/警告消息框内文字保持可读 */
     section[data-testid="stSidebar"] .stAlert * {
         color: inherit !important;
     }
 
-
-    /* ---- Expander 样式 ---- */
+    /* ---- Expander ---- */
     .streamlit-expanderHeader {
         font-weight: 600;
         font-size: 15px;
     }
 
-    /* ---- 文件上传区域增强 ---- */
+    /* ---- 文件上传 ---- */
     .stFileUploader > div {
-        border-radius: 12px;
+        border-radius: 10px;
     }
 
-    /* ---- 分割线增强 ---- */
+    /* ---- 分割线 ---- */
     hr {
         border: none;
-        border-top: 1px solid #e5e7eb;
+        border-top: 1px solid #E5E7EB;
         margin: 20px 0;
     }
 
-    /* ---- 版本信息 ---- */
+    /* ---- 版本标签 ---- */
     .version-tag {
         display: inline-block;
-        background: linear-gradient(135deg, #4472C4 0%, #2b5ea7 100%);
+        background: #4F46E5;
         color: white;
-        padding: 3px 10px;
-        border-radius: 12px;
+        padding: 2px 10px;
+        border-radius: 20px;
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.5px;
@@ -603,6 +595,57 @@ def render_sidebar() -> None:
 
         st.divider()
 
+        # ----- 审核规则区域 -----
+        st.markdown("### 📋 审核规则")
+
+        # 内置规则（只读展示）
+        with st.expander("📖 查看系统内置审核规则", expanded=False):
+            st.markdown(
+                '<p class="hint-text">以下为系统内置规则，不可修改。如需调整审核行为，请在下方"自定义补充规则"中添加覆盖规则。</p>',
+                unsafe_allow_html=True,
+            )
+            st.markdown("""
+**【核心原则】** 一切以PO为准。只有确认存在实质性错误或矛盾时才标RED。
+
+**🔴 RED（高风险）——仅限以下情况：**
+1. 金额计算实际错误（单价×数量≠总金额等）
+2. 数量明确不符
+3. 关键信息缺失或实质性矛盾（合同号不同、币种不同等）
+4. 贸易术语实质性变更（如FOB→CIF，影响费用承担和交货地点）
+5. 客户方（买方/申请人）信息与PO不一致
+6. 数字格式存在欧洲格式与英美格式歧义
+
+**🟡 YELLOW（需注意）——信息有差异但可合理解释：**
+1. 我方（卖方/受益人）地址与PO不同（公司有多个地址属正常）
+2. 计量单位不同但换算后金额一致（如KG与TON）
+3. 贸易术语相同但书写格式不同（如FOB SHANGHAI vs FOB Shanghai Port）
+4. PO中没有PO号，单据用合同号代替
+5. 某个字段在PO中找不到对应信息
+
+**🔵 BLUE（格式提醒）——不影响业务：**
+- 日期格式差异、大小写不统一、多余空格等
+
+**【数值校验】** 单价×数量=总金额、大小写金额一致、净重+皮重≈毛重
+
+**【数字格式歧义】** 欧洲格式与英美格式歧义必须标RED，不允许AI自行判断
+
+**【交叉比对】** 多份单据之间相同字段数据必须一致
+            """)
+
+        # 自定义补充规则（可编辑）
+        st.markdown(
+            '<p class="hint-text">✏️ <b>自定义补充规则</b>：在此添加额外审核规则。<b>自定义规则的优先级高于系统内置规则</b>，当两者冲突时以自定义规则为准。修改后立即生效，无需重启。留空则不添加额外规则。</p>',
+            unsafe_allow_html=True,
+        )
+        st.text_area(
+            "自定义规则",
+            height=200,
+            key=KEY_CUSTOM_RULES,
+            label_visibility="collapsed",
+        )
+
+        st.divider()
+
         # ----- 审核历史记录 -----
         _render_sidebar_history()
 
@@ -617,7 +660,7 @@ def render_sidebar() -> None:
 
         st.markdown(
             '<p class="hint-text" style="text-align:center;">'
-            '<span class="version-tag">v3.1</span><br/><br/>'
+            '<span class="version-tag">v3.2</span><br/><br/>'
             'AI辅助审核，仅供参考<br/>'
             '支持 PDF / Word / Excel / 图片输入<br/>'
             '统一输出 Excel 格式报告</p>',
@@ -955,6 +998,7 @@ def _handle_audit_start(
                 cancel_check=check_cancel,
                 deep_think=deep_think,
                 zhipu_ocr_api_key=get_zhipu_ocr_api_key(),
+                custom_rules=get_custom_rules(),
             )
         except LLMError as e:
             status_container.update(label="❌ 审核出错", state="error")
@@ -1136,19 +1180,19 @@ def _render_issues_table(issues: list) -> None:
         issue_id = issue.get("id", "?")
 
         if level == "RED":
-            color = "#cf1322"
-            bg = "#fff1f0"
-            border_color = "#ff4d4f"
+            color = "#DC2626"
+            bg = "#FEF2F2"
+            border_color = "#EF4444"
             icon = "🔴"
         elif level == "YELLOW":
-            color = "#d48806"
-            bg = "#fffbe6"
-            border_color = "#faad14"
+            color = "#D97706"
+            bg = "#FFFBEB"
+            border_color = "#F59E0B"
             icon = "🟡"
         else:
-            color = "#1677ff"
-            bg = "#e6f4ff"
-            border_color = "#4096ff"
+            color = "#2563EB"
+            bg = "#EFF6FF"
+            border_color = "#3B82F6"
             icon = "🔵"
 
         field_name = issue.get("field_name", "")

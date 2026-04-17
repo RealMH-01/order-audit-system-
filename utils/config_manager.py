@@ -25,6 +25,16 @@ KEY_DEEP_THINK = "deep_think_enabled"
 KEY_AUDIT_HISTORY = "audit_history"
 KEY_CANCEL_AUDIT = "cancel_audit"
 KEY_TOKEN_WARNING = "token_warning"
+KEY_CUSTOM_RULES = "custom_rules"
+
+DEFAULT_CUSTOM_RULES = """1. 集团关联公司识别规则：宁夏荆洪科技股份有限公司、上海金泓化工有限公司、湖北天鹅科技有限公司、湖北荆洪生物科技股份有限公司，属于同一集团（湖北荆洪集团）下的不同子公司。在CI、PL、托书等单据上出现这些公司之间的名称或地址差异，属于集团内部正常分工，只标YELLOW，不标RED。
+
+2. COA开具主体匹配规则（必须严格执行，违反必须标RED）：
+   - 戊二醛（Glutaraldehyde）产品的COA，只能由"宁夏荆洪"开具。如果戊二醛的COA由其他公司（如湖北天鹅）开具，必须标RED。
+   - 除戊二醛以外的其他化工产品的COA，只能由"湖北天鹅"开具。如果其他产品的COA由宁夏荆洪开具，必须标RED。
+   - 判断依据：检查COA文件中的产品名称和开具公司名称是否匹配以上规则。
+
+3. 贸易术语简写规则：当PO上写有详细交货条件（如"FOB Shanghai warehouse nominated by the buyers"），而CI/PL上只写了简写形式（如"FOB SHANGHAI"），只要贸易术语本身相同（都是FOB），视为书写简化，不属于实质性变更，只标YELLOW提醒，不标RED。"""
 
 
 # ============================================================
@@ -45,6 +55,7 @@ def init_session_state() -> None:
         KEY_AUDIT_HISTORY: [],           # 审核历史记录列表
         KEY_CANCEL_AUDIT: False,         # 取消审核标志
         KEY_TOKEN_WARNING: "",           # Token 长度警告信息
+        KEY_CUSTOM_RULES: DEFAULT_CUSTOM_RULES,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -183,3 +194,16 @@ def get_token_warning() -> str:
 def set_token_warning(warning: str) -> None:
     """设置 Token 长度警告信息。"""
     st.session_state[KEY_TOKEN_WARNING] = warning
+
+
+# ============================================================
+# 自定义审核规则
+# ============================================================
+def get_custom_rules() -> str:
+    """获取用户自定义审核规则。"""
+    return st.session_state.get(KEY_CUSTOM_RULES, DEFAULT_CUSTOM_RULES)
+
+
+def set_custom_rules(rules: str) -> None:
+    """设置用户自定义审核规则。"""
+    st.session_state[KEY_CUSTOM_RULES] = rules

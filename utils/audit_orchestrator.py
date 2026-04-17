@@ -68,6 +68,7 @@ def run_full_audit(
     cancel_check: Optional[Callable[[], bool]] = None,
     deep_think: bool = False,
     zhipu_ocr_api_key: Optional[str] = None,
+    custom_rules: Optional[str] = None,
 ) -> Dict[str, Any]:
     """执行完整审核流程。
 
@@ -382,6 +383,7 @@ def run_full_audit(
             template_text=template_processed,
             other_refs=other_refs_processed if other_refs_processed else None,
             deep_think=deep_think,
+            custom_rules=custom_rules,
         )
 
         # 调用大模型（含自动重试）
@@ -420,7 +422,7 @@ def run_full_audit(
     if len(successful_targets) >= 2:
         _progress("正在进行单据间交叉比对...")
         cross_start = time.time()
-        cross_messages = build_cross_check_prompt(successful_targets)
+        cross_messages = build_cross_check_prompt(successful_targets, custom_rules=custom_rules)
         cross_result = _call_and_parse(
             provider, api_key, cross_messages, "交叉比对", result["errors"],
             deep_think=deep_think,

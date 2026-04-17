@@ -50,6 +50,7 @@ def build_audit_prompt(
     template_text: Optional[str] = None,
     other_refs: Optional[List[str]] = None,
     deep_think: bool = False,
+    custom_rules: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """构造单份单据审核的完整 messages 列表。
 
@@ -97,6 +98,10 @@ def build_audit_prompt(
         has_template=template_text is not None,
     )
     parts.append(rules)
+
+    # 注入用户自定义审核规则
+    if custom_rules and custom_rules.strip():
+        parts.append(f"\n【用户自定义补充规则——必须严格遵守，优先级高于以上通用规则】\n{custom_rules.strip()}")
 
     user_content = "\n".join(parts)
 
@@ -222,6 +227,7 @@ issues按字段在单据上从上到下出现的位置排列。
 # ============================================================
 def build_cross_check_prompt(
     all_parsed_targets: List[Dict[str, str]],
+    custom_rules: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """构造多单据交叉比对的完整 messages 列表。
 
@@ -288,6 +294,10 @@ def build_cross_check_prompt(
 }
 
 如果所有单据之间数据完全一致，返回 issues 为空列表，summary 各项为 0。""")
+
+    # 注入用户自定义审核规则
+    if custom_rules and custom_rules.strip():
+        parts.append(f"\n【用户自定义补充规则——必须严格遵守，优先级高于以上通用规则】\n{custom_rules.strip()}")
 
     user_content = "\n".join(parts)
 
