@@ -46,6 +46,11 @@ _DOC_TYPE_HINTS = {
     "production": "生产通知单",
     "发货申请": "发货申请单",
     "shipping": "发货申请单",
+    "报关": "报关单",
+    "customs": "报关单",
+    "coa": "COA质检证书",
+    "质检": "COA质检证书",
+    "certificate": "COA质检证书",
 }
 
 
@@ -353,39 +358,46 @@ def run_full_audit(
     template_text = (
         template_data.get("content", "") if template_data and template_data.get("success") else None
     )
-    last_ticket_text = None
+    # 按单据类型索引上一票文件，避免把所有上一票文件拼成一个大文本
+    # 从而防止审核某类单据时看到其他类型的上一票信息引起误报
+    last_ticket_by_type: Dict[str, str] = {}
     if last_ticket_data:
-        last_parts = []
         for d in last_ticket_data:
             if d.get("content") and d.get("success"):
-                last_parts.append(d["content"])
-        if last_parts:
-            last_ticket_text = "\n\n---\n\n".join(last_parts)
+                doc_type = _guess_doc_type(d.get("filename", ""))
+                # 同类型覆盖（目前简化处理，保留最后一个）
+                last_ticket_by_type[doc_type] = d["content"]
 
     # ==========================================================
     # 步骤 1.5：Token 长度检测与智能分段处理
     # ==========================================================
     _progress("正在检测内容长度...")
 
-    # 收集所有辅助文本
-    auxiliary_texts = []
-    if last_ticket_text:
-        auxiliary_texts.append(last_ticket_text)
-    if template_text:
-        auxiliary_texts.append(template_text)
-    auxiliary_texts.extend(other_refs_texts)
-
     # 对每个待审核文件进行 token 预检
+    # 注意：每份待审核文件对应的上一票参考不同（按类型匹配），
+    # 所以 auxiliary_texts 需要针对每份文件单独构建
     token_warning_issued = False
     for target in target_files_data:
         target_content = target.get("content", "")
         if not target_content or not target.get("success"):
             continue
 
+        # 为当前文件匹配对应类型的上一票参考
+        t_fname = target.get("filename", "")
+        t_type = _guess_doc_type(t_fname)
+        matched_last = last_ticket_by_type.get(t_type)
+
+        pre_aux_texts: list[str] = []
+        if matched_last:
+            pre_aux_texts.append(matched_last)
+        if template_text:
+            pre_aux_texts.append(template_text)
+        pre_aux_texts.extend(other_refs_texts)
+
         po_proc, target_proc, aux_proc, was_truncated = smart_split_content(
             po_text=po_text,
             target_text=target_content,
-            other_texts=auxiliary_texts,
+            other_texts=pre_aux_texts,
             provider=provider,
         )
 
@@ -422,6 +434,18 @@ def run_full_audit(
         start_time = time.time()
         _progress(f"正在审核第 {idx}/{total_files} 份文件：{fname}...")
 
+        # ★ 按类型匹配上一票参考：只传与当前审核文件同类型的那一份
+        # 如果找不到匹配类型，则不传上一票参考（等同于未上传上一票文件）
+        matched_last_ticket = last_ticket_by_type.get(target_type)
+
+        # 根据当前文件对应的上一票参考，构建本次审核的辅助文本列表
+        auxiliary_texts: list[str] = []
+        if matched_last_ticket:
+            auxiliary_texts.append(matched_last_ticket)
+        if template_text:
+            auxiliary_texts.append(template_text)
+        auxiliary_texts.extend(other_refs_texts)
+
         # Token 智能分段处理
         po_processed, target_processed, aux_processed, _ = smart_split_content(
             po_text=po_text,
@@ -430,12 +454,12 @@ def run_full_audit(
             provider=provider,
         )
 
-        # 重建辅助文本
+        # 重建辅助文本（顺序必须与构建 auxiliary_texts 时一致）
         last_ticket_processed = None
         template_processed = None
         other_refs_processed = []
         aux_idx = 0
-        if last_ticket_text and aux_idx < len(aux_processed):
+        if matched_last_ticket and aux_idx < len(aux_processed):
             last_ticket_processed = aux_processed[aux_idx]
             aux_idx += 1
         if template_text and aux_idx < len(aux_processed):
