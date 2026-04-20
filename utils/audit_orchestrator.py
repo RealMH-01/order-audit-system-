@@ -76,19 +76,23 @@ _POSITIVE_KEYWORDS = [
     "是为了确认", "已被正确执行",
 ]
 
+# ★ 只有这些字段相关的RED才允许被降级为YELLOW
+# 其余所有字段的RED一律不降级
+_DOWNGRADE_ALLOWED_FIELDS = [
+    "卖方", "卖家", "seller", "买方", "买家", "buyer",
+    "发货人", "shipper", "收货人", "consignee",
+    "地址", "address", "签章", "公司名", "抬头",
+    "通知方", "notify",
+]
+
 
 def _post_process_force_downgrade(audit_result: dict) -> dict:
     """对审核结果做最终兜底修正。
 
-    只处理一种情况：level=RED 但 suggestion 中明确表示
-    "符合""正常""没有问题"等肯定性表述。
+    只处理一种情况：level=RED 且字段属于公司主体/地址类，
+    同时 suggestion 中明确表示"符合""正常""没有问题"等肯定性表述。
 
-    这种情况说明AI自己认为没问题却还标了RED，属于自相矛盾，
-    代码直接强制降级为YELLOW。
-
-    真正有错误的RED不会被误伤，因为真正的错误的suggestion
-    写的是"不一致""建议修改""请核实"等否定/提醒性表述，
-    不会命中这些肯定性关键词。
+    交易核心字段（合同号、金额、数量、产品名等）的RED绝不降级。
     """
     if not audit_result or "issues" not in audit_result:
         return audit_result
@@ -97,6 +101,11 @@ def _post_process_force_downgrade(audit_result: dict) -> dict:
     for issue in audit_result["issues"]:
         if issue.get("level") != "RED":
             continue
+        # 先检查字段是否属于允许降级的范围（公司主体/地址类）
+        field = issue.get("field_name", "").lower()
+        if not any(kw in field for kw in _DOWNGRADE_ALLOWED_FIELDS):
+            continue
+        # 只有允许降级的字段，才进一步检查suggestion
         sugg = issue.get("suggestion", "")
         if any(kw in sugg for kw in _POSITIVE_KEYWORDS):
             issue["level"] = "YELLOW"
@@ -229,7 +238,6 @@ def run_full_audit(
                     result["errors"].append(error_msg)
                     return result
                 else:
-                    # 参考图片OCR不是必须的，跳过即可
                     ocr_provider = provider
                     ocr_api_key = api_key
                     _progress("⚠️ 参考图片需要OCR但未提供智谱OCR密钥，将跳过图片识别")
@@ -246,7 +254,6 @@ def run_full_audit(
         images_to_ocr = [
             d for d in other_refs_data if d.get("is_image") and d.get("image_base64")
         ]
-        # 如果是DeepSeek且没有提供智谱OCR密钥，跳过图片OCR
         skip_image_ocr = (
             provider.lower().strip() in ("deepseek",)
             and not (zhipu_ocr_api_key and zhipu_ocr_api_key.strip())
@@ -271,7 +278,6 @@ def run_full_audit(
                     result["errors"].append(err_msg)
                     _progress(f"⚠️ {err_msg}")
 
-        # 非图片参考文件的文字也加入
         for d in other_refs_data:
             if not d.get("is_image") and d.get("content") and d.get("success"):
                 other_refs_texts.append(
@@ -306,7 +312,6 @@ def run_full_audit(
                 _progress(f"⚠️ {err_msg}")
                 ocr_parts.append(f"{'='*20} 第 {pg_idx} 页 {'='*20}\n[识别失败]")
 
-        # 将 OCR 结果写回 po_data，供后续审核使用
         po_data["content"] = "\n\n".join(ocr_parts)
         _progress("✅ PO扫描件OCR识别完成")
 
@@ -345,7 +350,6 @@ def run_full_audit(
                 _progress(f"⚠️ {err_msg}")
                 t_ocr_parts.append(f"{'='*20} 第 {pg_idx} 页 {'='*20}\n[识别失败]")
 
-        # 将 OCR 结果写回 target，供后续审核使用
         target["content"] = "\n\n".join(t_ocr_parts)
         if all_failed:
             target["success"] = False
@@ -359,13 +363,11 @@ def run_full_audit(
         template_data.get("content", "") if template_data and template_data.get("success") else None
     )
     # 按单据类型索引上一票文件，避免把所有上一票文件拼成一个大文本
-    # 从而防止审核某类单据时看到其他类型的上一票信息引起误报
     last_ticket_by_type: Dict[str, str] = {}
     if last_ticket_data:
         for d in last_ticket_data:
             if d.get("content") and d.get("success"):
                 doc_type = _guess_doc_type(d.get("filename", ""))
-                # 同类型覆盖（目前简化处理，保留最后一个）
                 last_ticket_by_type[doc_type] = d["content"]
 
     # ==========================================================
@@ -373,16 +375,12 @@ def run_full_audit(
     # ==========================================================
     _progress("正在检测内容长度...")
 
-    # 对每个待审核文件进行 token 预检
-    # 注意：每份待审核文件对应的上一票参考不同（按类型匹配），
-    # 所以 auxiliary_texts 需要针对每份文件单独构建
     token_warning_issued = False
     for target in target_files_data:
         target_content = target.get("content", "")
         if not target_content or not target.get("success"):
             continue
 
-        # 为当前文件匹配对应类型的上一票参考
         t_fname = target.get("filename", "")
         t_type = _guess_doc_type(t_fname)
         matched_last = last_ticket_by_type.get(t_type)
@@ -413,7 +411,7 @@ def run_full_audit(
     # ==========================================================
     # 步骤 2：逐份审核每个待审核文件
     # ==========================================================
-    successful_targets: list[dict] = []  # 用于后续交叉比对
+    successful_targets: list[dict] = []
     total_files = len(target_files_data)
 
     for idx, target in enumerate(target_files_data, 1):
@@ -434,11 +432,8 @@ def run_full_audit(
         start_time = time.time()
         _progress(f"正在审核第 {idx}/{total_files} 份文件：{fname}...")
 
-        # ★ 按类型匹配上一票参考：只传与当前审核文件同类型的那一份
-        # 如果找不到匹配类型，则不传上一票参考（等同于未上传上一票文件）
         matched_last_ticket = last_ticket_by_type.get(target_type)
 
-        # 根据当前文件对应的上一票参考，构建本次审核的辅助文本列表
         auxiliary_texts: list[str] = []
         if matched_last_ticket:
             auxiliary_texts.append(matched_last_ticket)
@@ -446,7 +441,6 @@ def run_full_audit(
             auxiliary_texts.append(template_text)
         auxiliary_texts.extend(other_refs_texts)
 
-        # Token 智能分段处理
         po_processed, target_processed, aux_processed, _ = smart_split_content(
             po_text=po_text,
             target_text=target_content,
@@ -454,7 +448,6 @@ def run_full_audit(
             provider=provider,
         )
 
-        # 重建辅助文本（顺序必须与构建 auxiliary_texts 时一致）
         last_ticket_processed = None
         template_processed = None
         other_refs_processed = []
@@ -468,7 +461,6 @@ def run_full_audit(
         if aux_idx < len(aux_processed):
             other_refs_processed = aux_processed[aux_idx:]
 
-        # 构造 prompt
         messages = build_audit_prompt(
             po_text=po_processed,
             target_text=target_processed,
@@ -480,7 +472,6 @@ def run_full_audit(
             custom_rules=custom_rules,
         )
 
-        # 调用大模型（含自动重试）
         audit_result = _call_and_parse(
             provider, api_key, messages, fname, result["errors"],
             deep_think=deep_think,
@@ -601,21 +592,7 @@ def _call_and_parse(
     deep_think: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """调用大模型并解析 JSON 结果，失败时自动重试。
-
-    Args:
-        provider: 模型提供商。
-        api_key: API 密钥。
-        messages: 完整的 messages 列表。
-        file_label: 用于日志/错误信息的文件标签。
-        errors: 错误列表，失败时追加错误信息。
-        max_retries: 最大尝试次数。
-        deep_think: 是否使用深度思考模式。
-        progress_callback: 进度回调函数。
-
-    Returns:
-        解析后的审核结果字典，或 None。
-    """
+    """调用大模型并解析 JSON 结果，失败时自动重试。"""
     for attempt in range(1, max_retries + 1):
         try:
             if progress_callback:
@@ -633,7 +610,6 @@ def _call_and_parse(
             if parsed is not None:
                 return parsed
 
-            # 解析失败但有回复，如果还有重试机会
             if attempt < max_retries:
                 logger.warning(
                     "[%s] 第%d次尝试: JSON解析失败，准备重试", file_label, attempt
